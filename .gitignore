@@ -1,0 +1,61 @@
+# --- Python / Virtual Environment ---
+venv/
+.env
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+.eggs/
+.build/
+.python-version
+
+# Byte-compiled / cache
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.dmypy.json
+
+# Distribution / packaging
+build/
+dist/
+*.egg
+wheels/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db
+
+# Logs / Reports
+logs/
+*.log
+
+# Jupyter / experiments
+.ipynb_checkpoints/
+
+# Coverage / test
+.coverage
+htmlcov/
+coverage.xml
+.pytest_cache/
+
+# Local data / exports
+messungen_ab_vergleich.xlsx
+*.xlsx~
+~$*.xlsx
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# System
+desktop.ini
+
+# Cache
+.cache/
