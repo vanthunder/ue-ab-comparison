@@ -1,198 +1,196 @@
-# Unreal Engine A/B Metric Comparison Tool
+<div align="center">
 
-Author: Marvin Schubert  
-Version: 1.0.0  
-License: MIT
+# UE A/B Performance Comparison
 
----
-## 1. Purpose
-This tool assembles per‑scene performance aggregates for two Unreal Engine rendering / content pipeline variants ("A" and "B") and produces an Excel workbook with:
-* Per‑scene aggregated metrics for Variant A and Variant B
-* A per‑scene comparison sheet including the relative delta (Δ B vs A in %)
-* A global summary sheet across all scenes
+**Excel post‑processing tool for analyzing Unreal Engine pipeline variants (A vs B)**
 
-It is designed to be transparent and reproducible in line with the methodological principles of the accompanying bachelor thesis (method section excerpt provided by the author). The implementation emphasises:
-* Explicit aggregation rules (mean of per‑run metrics; percentiles already computed per run upstream)
-* Stable metric ordering
-* Robust label matching (tolerant aliases)
-* Optional FPS recomputation from frametime means (to avoid averaging instantaneous FPS directly)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/Status-Research--grade-success.svg)]()
 
----
-## 2. Methodological Foundations (Summary)
-The underlying study evaluates two rendering / content pipeline configurations:
-* **Pipeline A**: Modern UE5 features (e.g. Lumen for Global Illumination & Reflections, Nanite for virtualised geometry)
-* **Pipeline B**: Classical baked pipeline (Lightmass GI, Reflection Captures + SSR, conventional LOD chains)
+**Author:** Marvin Schubert  
+**Version:** 1.0.0  
+**Date:** September 2025  
+**License:** MIT
 
-### 2.1 Experimental Design
-* Fixed capture windows: **20 seconds per run**.
-* Per scene & variant: **≥ 3 repeated runs** (identical conditions).
-* Triggering: Automated Level Blueprint event (key 5) executes `csvprofile start` / `csvprofile stop`.
-* Non‑varied parameters (camera path, resolution, project profiles) held constant to isolate pipeline effects.
+</div>
 
-### 2.2 Primary & Secondary Indicators
-* **Primary metric:** Frametime p95 (95th percentile in ms) — emphasises tail latency while reducing single outlier influence.
-* **Secondary metrics:** GPU Time (mean & p95), Draw Calls, visible Primitives, Local VRAM, Shader Memory, mean Frametime, derived FPS, frame count (N).
-* **Scaling aspect:** Scene 2 acts as a micro‑benchmark to observe geometric scaling (Δ p95 vs visible Primitives / Draw Calls / VRAM).
+## Overview
+This repository contains the second (post‑processing) stage in a two‑step performance analysis pipeline for Unreal Engine:
 
-### 2.3 Aggregation Rules Implemented Here
-* Input sheets already contain per‑run metrics (including p95 values). This tool computes **arithmetic means across runs** for each metric (e.g. scene mean of per‑run p95 values — *not* recomputing percentile over concatenated raw frames).
-* Delta (B vs A) = `(B - A) / A * 100%` when A is finite.
-* Optional FPS recomputation (default ON): For each run: `FPS_run = 1000 / FrametimeMeanRun_ms`; reported scene FPS = mean(FPS_run). This avoids discouraging statistical pitfalls of averaging instantaneous FPS.
+1. **Upstream Tool (CSV → Aggregation)**: Robustly parses raw UE profiler `EXP_*.csv` files with variable column counts and produces one or two aggregation Excel workbooks containing per‑run metrics (means & p95 values).
+2. **This Tool (Aggregation → A/B Comparison)**: Consumes those workbook(s) and generates a consolidated A/B comparison report with per‑scene deltas.
 
-### 2.4 Data Quality & Exclusion
-Run filtering (if applied upstream) follows the thesis rules: discard runs disrupted by user error, transient system activity, or inconsistent configuration. This script assumes only valid runs remain in the Excel sources.
+Result: A research‑grade Excel workbook showing structured performance differences between two rendering/content pipeline variants (A vs B) with reproducible aggregation logic.
 
-### 2.5 Validity & Reliability (Context)
-* **Internal validity:** Controlled environment; unchanged render/config parameters; fixed camera path; constant measurement window length.
-* **Reliability:** Repetition (≥3 runs) and explicit aggregation rules.
-* **Transparency:** Deterministic parsing and formatting; reproducible arithmetic operations; consistent file naming.
+## Scientific Background
 
----
-## 3. Metrics (German Labels Retained)
-| Canonical Label            | Meaning (English)                              | Aggregation Here            |
-|----------------------------|-----------------------------------------------|-----------------------------|
-| N                          | Frame count in window                         | Mean of per‑run frame counts|
-| Frametime Ø [ms]           | Mean frametime                                | Mean of per‑run means       |
-| Frametime p95 [ms]         | 95th percentile frametime (per run upstream)  | Mean of per‑run p95 values  |
-| FPS Ø [#]                  | Mean FPS (recomputed option)                  | Mean of derived per‑run FPS |
-| GPU-Zeit Ø [ms]            | Mean GPU time                                 | Mean                        |
-| GPU-Zeit p95 [ms]          | 95th percentile GPU time                      | Mean of per‑run p95 values  |
-| Draw Calls Ø [#]           | Mean Draw Calls                               | Mean                        |
-| Primitives Ø [#]           | Mean visible primitives                       | Mean                        |
-| Local VRAM [MB]            | Mean local GPU memory usage                   | Mean                        |
-| Shader Mem [MB]            | Mean shader memory                            | Mean                        |
+### Motivation
+Raw UE CSV exports are noisy and structurally inconsistent. Percentiles (p95) and mean values must be computed from data sets whose integrity is preserved in the upstream phase. This tool assumes that stage has already delivered trustworthy per‑run aggregates and focuses on transparent cross‑variant comparison.
 
----
-## 4. Input Formats
-### 4.1 Single Workbook Mode
-A file `messungen_auswertung.xlsx` containing sheets named:
-```
-Scene1_A, Scene1_B, Scene2_A, Scene2_B, ...
-```
-Each sheet:
-* Column A: metric labels (German)
-* Columns B..K: numeric values per run (German formatting tolerated: thousand dot, decimal comma)
+### Core Aggregation Principle
+All metrics in the input sheets are already per‑run aggregates. This script computes only the **arithmetic mean across runs per scene and variant**, plus a guarded percentage delta:
 
-### 4.2 Two Workbook Mode
-Two files (auto‑detected or explicitly provided):
-* `messungen_auswertung_a.xlsx`
-* `messungen_auswertung_b.xlsx`
+\(\Delta = \frac{B - A}{A} \times 100\) (only if A is finite and non‑zero)
 
-Sheets may be named either `Scene{n}` (variant inferred from file) or `Scene{n}_A` / `Scene{n}_B`.
+### Why Recompute FPS?
+Mean FPS reported upstream might be an arithmetic mean of instantaneous FPS values (statistically biased). Here (default ON) FPS is recomputed from each run's mean frametime:  
+`FPS_run = 1000 / FrametimeMeanRun_ms` → scene FPS = mean(FPS_run). Disable with `--no-recompute-fps` if you need the original upstream mean.
 
-### 4.3 Label Matching
-The tool normalises labels (lowercase, removing diacritics & punctuation) and matches them via tolerant alias sets. Unrecognised rows are ignored.
+## Features
+- 🔄 Dual input modes: single combined workbook or two variant‑specific workbooks
+- 🧮 Explicit delta calculation with division‑by‑zero safeguards
+- 🎯 Metric ordering + robust German label alias matching
+- 🧵 Locale‑aware numeric parsing (German & English; multi‑dot thousands)
+- 🕒 Optional FPS recomputation from frametime means (default)
+- 📊 Per‑scene comparison sheets + global summary sheet
+- 🇩🇪 German‑style number formatting (decimal comma, NBSP thousands)
+- 🧪 Debug diagnostics (`--debug`) for run counts & missing metrics
 
----
-## 5. Output
-Generated workbook (default): `messungen_ab_vergleich.xlsx`
-Per scene:
-* `Scene{n}_Agg_A` – aggregated metrics for Variant A
-* `Scene{n}_Agg_B` – aggregated metrics for Variant B
-* `Scene{n}_Vergleich` – comparison (Metric | A (Ø) | B (Ø) | Δ B vs A [%])
+## Metrics (German Labels Retained)
+| Label (German)        | Meaning (English)            | Aggregation (here)                 |
+|-----------------------|------------------------------|------------------------------------|
+| N                     | Frame count                  | Mean of per‑run counts             |
+| Frametime Ø [ms]      | Mean frametime               | Mean of per‑run means              |
+| Frametime p95 [ms]    | 95th percentile frametime    | Mean of per‑run p95 values         |
+| FPS Ø [#]             | Mean FPS (recomputed option) | Mean of derived per‑run FPS        |
+| GPU-Zeit Ø [ms]       | Mean GPU time                | Mean                                |
+| GPU-Zeit p95 [ms]     | 95th percentile GPU time     | Mean of per‑run p95 values         |
+| Draw Calls Ø [#]      | Draw calls                   | Mean                                |
+| Primitives Ø [#]      | Visible primitives           | Mean                                |
+| Local VRAM [MB]       | Local VRAM usage             | Mean                                |
+| Shader Mem [MB]       | Shader memory usage          | Mean                                |
 
-Global sheet `Gesamtübersicht` summarises all scenes vertically, separated by blank lines.
-
-Numeric formatting uses German style (thousand separator '.' and decimal comma ',') to remain consistent with upstream artefacts.
-
----
-## 6. Installation
-### 6.1 Requirements
-Python 3.10+ (recommended). Install dependencies:
+## Installation
 ```bash
 pip install -r requirements.txt
 ```
-`requirements.txt` includes:
-```
-pandas
-numpy
-openpyxl
-```
+Dependencies: `pandas`, `numpy`, `openpyxl` (Python 3.10+ recommended).
 
-### 6.2 Virtual Environment (Optional but Recommended)
+Optional virtual environment:
 ```bash
 python -m venv venv
-# Windows PowerShell
-./venv/Scripts/Activate.ps1
+./venv/Scripts/Activate.ps1   # PowerShell
 pip install -r requirements.txt
 ```
 
----
-## 7. Usage
-From the project directory:
+## Input Expectations
+You must first generate aggregation workbook(s) using the upstream CSV analyzer.
 
-### 7.1 Single Workbook
+Accepted inputs for this stage:
+
+1. Single file: `messungen_auswertung.xlsx` containing sheets named `Scene{n}_A` and `Scene{n}_B`.
+2. Two files: `messungen_auswertung_a.xlsx` & `messungen_auswertung_b.xlsx` with sheets either `Scene{n}` (variant inferred) or suffixed.
+
+Sheet structure:
+```
+Column A : Metric label (German)
+Columns B..K : Numeric run values (locale variants tolerated)
+```
+
+## Usage
+Single workbook mode:
 ```bash
 python ue_ab.py
 ```
-(Requires `messungen_auswertung.xlsx`.)
-
-### 7.2 Two Explicit Workbooks
+Two explicit workbooks:
 ```bash
 python ue_ab.py --a messungen_auswertung_a.xlsx --b messungen_auswertung_b.xlsx
 ```
-
-### 7.3 Automatic Detection
-If both `messungen_auswertung_a.xlsx` and `messungen_auswertung_b.xlsx` are present:
+Auto-detect variant files:
 ```bash
 python ue_ab.py --auto
 ```
-(Autodetect also triggers without `--auto` if both files exist and single workbook is absent.)
-
-### 7.4 Custom Output Name
+Custom output filename:
 ```bash
-python ue_ab.py --a a.xlsx --b b.xlsx --out comparison.xlsx
+python ue_ab.py --auto --out vergleich_report.xlsx
 ```
-
-### 7.5 Disable FPS Recalculation
+Disable FPS recomputation:
 ```bash
-python ue_ab.py --no-recompute-fps
+python ue_ab.py --no-recompute-fps --auto
+```
+Debug diagnostics (run-level presence & missing metrics hints):
+```bash
+python ue_ab.py --debug --auto
 ```
 
-### 7.6 Exit Codes / Errors
-* Missing expected input files → non‑zero exit with explanatory message.
-* No matching sheets parsed → runtime error message.
+## Output
+Default output: `messungen_ab_vergleich.xlsx`
 
----
-## 8. Reproducibility & Data Quality Checklist
-| Aspect                | Practice Implemented |
-|-----------------------|----------------------|
-| Fixed window length   | 20 s per run (upstream) |
-| Runs per condition    | ≥ 3 (enforced upstream) |
-| Percentile method     | Per run upstream (NumPy p95 linear) averaged here |
-| FPS derivation        | Derived from per‑run frametime means (default) |
-| Missing values        | Ignored in per‑run lists; NaN if no valid values |
-| Label robustness      | Alias normalisation & substring pattern matching |
-| Delta computation     | (B − A)/A * 100% with guard against NaN/inf |
-
----
-## 9. Extensibility
-Potential extensions:
-* Additional percentile columns (p99) if upstream provided.
-* CSV export of comparison tables.
-* Confidence intervals via run variance (if run count high enough).
-* Median‑based aggregation toggle for robustness against skew.
-
----
-## 10. Citation Guidance
-If you cite or reference the tool in academic work, consider:
+Per scene:
 ```
-Schubert, M. (2025). Unreal Engine A/B Metric Comparison Tool (Version 1.0.0) [Software]. MIT License.
+Scene{n}_Agg_A        Aggregated metrics (variant A)
+Scene{n}_Agg_B        Aggregated metrics (variant B)
+Scene{n}_Vergleich    Comparison with Δ B vs A [%] + note row explaining formula & rounding
 ```
-And, where appropriate, reference the methodology section of the associated thesis for experimental design.
+Global sheet: `Gesamtübersicht` (vertical list of all metrics across scenes).
+
+Formatting rules:
+* German decimal comma, NBSP thousands grouping (e.g. `12 345,678`)
+* Integer metrics: N, Draw Calls, Primitives (0 decimals)
+* Other metrics & Δ: 3 decimals
+* Δ formula note embedded in each comparison sheet
+
+## Reproducibility & Data Quality
+| Aspect                | Implementation Detail                                   |
+|-----------------------|----------------------------------------------------------|
+| Run repetition        | Upstream ensures ≥3 valid runs per scene/variant          |
+| Window length         | 20s capture windows (upstream)                           |
+| Percentiles           | Computed upstream per run (p95), averaged here            |
+| FPS method            | Derived from frametime means (default)                    |
+| Delta safety          | Guarded division (A finite & ≠ 0)                         |
+| Locale parsing        | Mixed German/English formats, multi-dot thousands         |
+| Missing values        | Ignored; metric becomes NaN if no valid run values        |
+| Label robustness      | Normalisation + tolerant alias patterns                   |
+
+## Example (Conceptual)
+Notional scene comparison excerpt:
+```
+Metric                 A (Ø)        B (Ø)        Δ B vs A [%]
+Frametime p95 [ms]     13,421       12,978       -3,303
+Draw Calls Ø [#]       5 214        5 198        -0,307
+Primitives Ø [#]       12 454 397   12 612 112   +1,266
+FPS Ø [#]              83,742       84,105       +0,434
+```
+
+## Technical Implementation Highlights
+- Pandas-based Excel ingestion with permissive label selection
+- Safe numeric parsing with locale heuristics (dots+commas, multi-dot) 
+- Structured workbook writer using `openpyxl`
+- Modular aggregation + optional FPS recomputation
+- Debug mode surfaces run distributions for transparency
+
+## Extensibility Ideas
+- Add confidence intervals (if run count sufficient)
+- Optional median aggregation
+- Export CSV summary alongside Excel
+- Additional percentile columns (p99) when provided upstream
+
+## Citation
+If this tool contributes to academic work, cite it together with the upstream analyzer:
+```bibtex
+@software{schubert2025_ue_ab_comparison,
+	author  = {Schubert, Marvin},
+	title   = {UE A/B Performance Comparison Tool},
+	year    = {2025},
+	version = {1.0.0},
+	url     = {https://github.com/REPO_PLACEHOLDER/ue-ab-comparison}
+}
+```
+
+## License
+MIT License – see `LICENSE`.
+
+## Disclaimer
+Assumes upstream correctness of per‑run aggregates. Does not recompute percentiles from raw frames; focuses on aggregation consistency and presentation.
+
+## Changelog
+| Version | Date        | Notes                                                     |
+|---------|-------------|-----------------------------------------------------------|
+| 1.0.0   | 2025-09     | Initial release: dual input, FPS recompute, locale parse  |
+
+## Contact / Support
+Questions about methodology / implementation: please reference accompanying thesis material first; future issue tracker (if repo public) for bug reports.
 
 ---
-## 11. License
-Released under the MIT License (see LICENSE file). Copyright (c) 2025 Marvin Schubert.
-
----
-## 12. Disclaimer
-This tool assumes upstream correctness of per‑run metrics (especially p95). It does not validate raw frame time series or recompute percentiles from raw frames; it focuses on consistent aggregation and presentation.
-
----
-## 13. Changelog
-* 1.0.0: Initial public release, bilingual metric labels retained, FPS recomputation added (default ON), dual input mode.
-
----
-## 14. Support
-For clarifications or methodological questions, consult the associated thesis methodology chapter. Bug reports can be documented via issue tracking (if repository hosting is added in future).
+*Part of a Bachelor's thesis research pipeline on real‑time rendering performance analysis.*

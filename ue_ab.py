@@ -1,48 +1,107 @@
 """
-A/B comparison generator for Unreal Engine CSV -> Excel aggregations.
+Unreal Engine A/B Comparison Excel Generator (Post‑Processing Tool)
+==================================================================
 
-Purpose
--------
-Creates per–scene aggregated metrics (mean across runs) for two variants (A,B) and
-builds a comparison sheet including the relative delta (B vs A in percent).
+This script takes aggregated metric workbooks (produced by a preceding
+"Performance Analysis Tool for Unreal Engine CSV Exports") and builds a
+research‑grade A/B comparison Excel report with per‑scene sheets and a summary.
 
-Input Modes
+UPSTREAM (PRECEDING) TOOL (Context)
+----------------------------------
+The earlier pipeline step (referenced here for clarity) processes raw profiler
+CSV exports and produces aggregated per‑scene/variant workbooks.
+Summary of that tool:
+
+    Performance Analysis Tool for Unreal Engine CSV Exports
+    Robust CSV → Excel Report Generator
+
+    Author: Marvin Schubert
+    Version: 1.0.0
+    Date: September 2025
+
+    INSTALLATION REQUIREMENTS:
+        pip install pandas numpy openpyxl
+
+    USAGE (upstream):
+        1. Create folder 'messungen' beside the script
+        2. Put EXP_*.csv files inside (pattern: EXP_[Scene]_[A|B]_Messung_[Run].csv)
+        3. Run: python messung_auswertung.py
+        4. Get an Excel aggregation (p95 / mean metrics per scene & variant)
+
+You then feed the produced workbook(s) into THIS A/B comparison tool.
+
+WHAT THIS TOOL DOES
+-------------------
+Creates per‑scene aggregated tables for variants A and B and a comparison table
+with relative percent deltas (Δ = (B − A) / A · 100). Handles either a single
+combined workbook or two variant‑specific workbooks. Adds a global summary.
+
+INSTALLATION (this tool)
+------------------------
+    pip install -r requirements.txt
+  or explicitly:
+    pip install pandas numpy openpyxl
+
+WORKFLOW PIPELINE
+-----------------
+1. Run upstream CSV → aggregation tool to obtain:
+       - Single combined:  messungen_auswertung.xlsx
+         (contains sheets "Scene{n}_A" & "Scene{n}_B")
+       OR
+       - Two files:        messungen_auswertung_a.xlsx / messungen_auswertung_b.xlsx
+         (sheets may be named "Scene{n}" or already suffixed with _A / _B)
+2. Run this script (examples below) to produce the A/B comparison workbook:
+       messungen_ab_vergleich.xlsx (default name)
+
+INPUT MODES
 -----------
-1) Single workbook (legacy): 'messungen_auswertung.xlsx' containing sheets "Scene{n}_A" / "Scene{n}_B".
-2) Two-workbook mode: separate files for each variant
-            - 'messungen_auswertung_a.xlsx' (or provided via --a PATH)
-            - 'messungen_auswertung_b.xlsx' (or provided via --b PATH)
-     Sheets may be named either "Scene{n}" (variant inferred from file) or already "Scene{n}_A" / "Scene{n}_B".
+1) Single workbook: 'messungen_auswertung.xlsx' with sheets "Scene{n}_A" / "Scene{n}_B".
+2) Two workbooks: 'messungen_auswertung_a.xlsx' & 'messungen_auswertung_b.xlsx' (or via --a/--b) with sheets "Scene{n}" or suffixed.
 
-Per Sheet Format
-----------------
-First column: metric labels (German labels retained intentionally to match upstream export).
-Columns 2..k: numeric run values (German decimal notation tolerated: thousand separators '.' and decimal comma ',').
+PER SHEET (INPUT) FORMAT
+------------------------
+Column 1: metric labels (German labels intentionally retained to match source export)
+Columns 2..k: numeric run values (German or English numeric formatting tolerated: '.' thousands + ',' decimal; multi‑dot thousand grouping supported).
 
-Output
+OUTPUT
 ------
-Workbook 'messungen_ab_vergleich.xlsx' with sheets per scene:
-    - Scene{scene}_Agg_A
-    - Scene{scene}_Agg_B
-    - Scene{scene}_Vergleich  (tabular comparison: metric | A mean | B mean | Δ B vs A [%])
-Plus a summary sheet (Gesamtübersicht) listing all scenes.
+Workbook 'messungen_ab_vergleich.xlsx' containing, per scene:
+    Scene{n}_Agg_A         (Aggregated metrics variant A)
+    Scene{n}_Agg_B         (Aggregated metrics variant B)
+    Scene{n}_Vergleich     (Tabular comparison with Δ B vs A [%])
+Plus sheet: 'Gesamtübersicht' (summary across all scenes).
 
-Methodological Notes
+METHODOLOGICAL NOTES
 --------------------
-* Each metric is aggregated as the arithmetic mean of per‑run values (runs are assumed pre‑computed
-    for percentiles such as p95; thus we average the per‑run p95 values, not raw frame samples).
-* Optional recomputation of FPS mean is provided (default ON) by deriving FPS per run from mean
-    frametime (FPS_run = 1000 / FrametimeMeanRun_ms) and averaging those, avoiding arithmetic means of
-    instantaneous FPS series.
-* Delta (B vs A) = (B - A) / A * 100 %, computed when A is finite.
+* Means: Arithmetic mean across run‑level aggregated values (p95 values are already per‑run aggregates upstream).
+* Optional FPS recomputation (default ON): Derives FPS per run from mean frametime (1000 / ms) and averages those values (avoids bias of direct FPS arithmetic mean).
+* Delta formula: Δ = (B − A) / A · 100, only when A is finite and non‑zero.
+* Formatting: German style decimal comma, NBSP thousands; integer counters (N, Draw Calls, Primitives) have 0 decimals; times, memory, FPS, Δ use 3 decimals.
 
-CLI
----
-    python ue_ab.py                               # single workbook mode
-    python ue_ab.py --a a.xlsx --b b.xlsx          # two separate workbooks
-    python ue_ab.py --auto                        # auto-detect *_a.xlsx and *_b.xlsx
-    python ue_ab.py --out result.xlsx             # custom output filename
-    --no-recompute-fps                            # keep original FPS if present instead of recomputing
+CLI QUICK START
+---------------
+    # Single combined workbook mode
+    python ue_ab.py
+
+    # Two explicit workbooks
+    python ue_ab.py --a messungen_auswertung_a.xlsx --b messungen_auswertung_b.xlsx
+
+    # Auto-detect *_a.xlsx / *_b.xlsx in current directory
+    python ue_ab.py --auto
+
+    # Custom output filename
+    python ue_ab.py --auto --out vergleich_report.xlsx
+
+    # Keep original FPS (skip recomputation)
+    python ue_ab.py --no-recompute-fps --auto
+
+ARGUMENTS
+---------
+--a / --b            Paths to variant A/B workbooks
+--auto               Auto-detect default *_a.xlsx / *_b.xlsx if present
+--out PATH           Output Excel file name/path (default: messungen_ab_vergleich.xlsx)
+--no-recompute-fps   Disable FPS recomputation from frametime means
+--debug              Print per-scene parsing and missing-metric diagnostics
 
 Author: Marvin Schubert (c) 2025
 Version: 1.0.0
