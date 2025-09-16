@@ -1,4 +1,4 @@
-"""\
+"""
 A/B comparison generator for Unreal Engine CSV -> Excel aggregations.
 
 Purpose
@@ -88,7 +88,7 @@ LABEL_ALIASES: Dict[str, List[str]] = {
     "GPU-Zeit Ø [ms]": ["gpu-zeitøms", "gpuzeitøms", "gpuzeitoms", "gpuzeit ms", "gpu ø"],
     "GPU-Zeit p95 [ms]": ["gpu-zeitp95ms", "gpuzeitp95ms", "gpu p95"],
     "Draw Calls Ø [#]": ["drawcallsø#", "drawcalls", "draw calls"],
-    "Primitives Ø [#]": ["primitivesø#", "primitives"],
+    "Primitives Ø [#]": ["primitivesø#", "primitives", "primitive", "visibleprimitives", "visibleprimitive", "prim"],
     "Local VRAM [MB]": ["localvrammb", "vram", "gpu memory", "gpu mem", "local vram"],
     "Shader Mem [MB]": ["shadermemmb", "shader mem", "shader memory"],
 }
@@ -98,10 +98,10 @@ DECIMALS = {
     "N": 0,
     "FPS Ø [#]": 3,
     "Draw Calls Ø [#]": 0,
-    "Primitives Ø [#]": 1,
+    "Primitives Ø [#]": 0,  # integer representation for primitives
     "Local VRAM [MB]": 3,
     "Shader Mem [MB]": 3,
-    # default für Zeitmaße (ms):
+    # default for time metrics (ms): 3
 }
 
 # --------- Helpers ---------
@@ -122,48 +122,118 @@ def best_label_match(raw_label: str) -> Optional[str]:
 
 
 def parse_number(val) -> Optional[float]:
-    """Lenient numeric parser supporting German formatting and blanks.
+    """Robust numeric parser handling mixed German/English formatting.
 
-    Rules:
-        * Accept ints / floats directly (reject NaN/inf).
-        * For strings: remove spaces, remove thousand separators '.', replace decimal comma ',' with '.'
-        * Strip any trailing unit characters.
-        * Return None if value is empty, dash or unparsable.
+    Logic (adapted from requested update snippet):
+      * Accept existing numeric types directly (filter NaN/inf).
+      * Treat None / empty / dash as missing.
+      * Remove regular and non-breaking spaces.
+      * If BOTH '.' and ',' occur: assume German style ('.' thousands, ',' decimal) -> strip '.' then replace ',' with '.'.
+      * Else if only ',' occurs: treat it as decimal separator -> replace with '.'.
+      * Else if only '.' occurs: treat '.' as decimal separator (leave as is).
+      * Else keep digits (e.g. '1000').
+      * Final fallback: strip non [0-9 . -] chars and retry.
+      * Returns None if still unparsable.
     """
     if val is None:
         return None
     if isinstance(val, (int, float, np.number)):
-        if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        try:
+            f = float(val)
+        except Exception:
             return None
-        return float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
     s = str(val).strip()
-    if not s or s == "-":
+    if s == "" or s == "-":
         return None
-    # Entferne Leerzeichen
-    s = s.replace(" ", "")
-    # Entferne Tausendertrennpunkte (.) und ersetze Dezimalkomma (,)
-    # Achtung: erst Punkte raus, dann Komma -> Punkt
-    s = s.replace(".", "").replace(",", ".")
-    # Entferne evtl. Einheitensuffixe in Zahlenfeldern (sollten nicht vorkommen)
-    s = re.sub(r"[^0-9.\-eE+]", "", s)
+    # remove spaces (including NBSP)
+    s = s.replace('\xa0', '').replace(' ', '')
+    if '.' in s and ',' in s:
+        # German style: 1.234,56
+        s = s.replace('.', '')
+        s = s.replace(',', '.')
+    else:
+        if ',' in s and '.' not in s:
+            # Only comma present -> decimal comma
+            s = s.replace(',', '.')
+        # else: only '.' or none -> treat '.' as decimal point; if it was a thousands separator we cannot infer safely.
+        elif '.' in s and s.count('.') > 1:
+            # Multiple dots but no comma -> treat ALL dots as thousands separators
+            s = s.replace('.', '')
     try:
         return float(s)
-    except Exception:
-        return None
+    except ValueError:
+        cleaned = re.sub(r'[^0-9.\-]', '', s)
+        # If still multiple dots (likely thousands) remove all but last
+        if cleaned.count('.') > 1:
+            # Keep only the last dot (if interpreting final group as decimals) OR remove all if groups len==0
+            parts = cleaned.split('.')
+            # Heuristic: if last part length in {1,2,3} and others length 3 -> treat preceding as thousands
+            if all(len(p)==3 for p in parts[:-1]) and 1 <= len(parts[-1]) <= 3:
+                cleaned = ''.join(parts[:-1]) + '.' + parts[-1]
+            else:
+                # Fallback: strip all dots -> integer
+                cleaned = cleaned.replace('.', '')
+        try:
+            return float(cleaned)
+        except ValueError:
+            # Optional warning (could be toggled via env if needed)
+            # print(f"WARNING: could not parse number: {s!r}")
+            return None
+
+def percent_delta(a: Optional[float], b: Optional[float]) -> float:
+    """Compute percentage delta (B vs A) = (B - A)/A * 100.
+    Returns NaN if A is None/NaN/0 or B is None/NaN.
+    """
+    if a is None or b is None:
+        return float('nan')
+    if isinstance(a, float) and (math.isnan(a) or math.isinf(a)):
+        return float('nan')
+    if isinstance(b, float) and (math.isnan(b) or math.isinf(b)):
+        return float('nan')
+    if a == 0:
+        return float('nan')
+    return (b - a) / a * 100.0
+
+NBSP = "\u00A0"  # non-breaking space for thousands grouping
+
+def _group_int(n: int) -> str:
+    s = str(abs(n))
+    parts = []
+    while s:
+        parts.append(s[-3:])
+        s = s[:-3]
+    grouped = NBSP.join(reversed(parts))
+    return f"-{grouped}" if n < 0 else grouped
 
 def fmt_de(label: str, val: Optional[float]) -> str:
-    """Format value using German thousands separator and decimal comma with label-specific precision."""
+    """Format numeric value with decimal comma & NBSP thousands separator.
+
+    Rounding policy:
+      - Precision per DECIMALS[label] else 3.
+      - Integer metrics (precision 0) displayed without decimal part.
+      - Delta column uses label 'Δ' -> 3 decimals.
+    """
     if val is None or (isinstance(val, float) and (math.isnan(val) or math.isinf(val))):
         return ""
-    # Standard: 3 Nachkommastellen für ms / sonst DECIMALS
-    prec = DECIMALS.get(label, 3)
-    # Tausenderpunkt (deutsch), Dezimalkomma:
-    # Wir formatieren zunächst mit US-Konvention und wandeln danach.
-    if prec == 0:
-        s = f"{val:,.0f}"
+    # enforce 3 decimals for delta
+    if label == "Δ":
+        prec = 3
     else:
-        s = f"{val:,.{prec}f}"
-    return s.replace(",", "_").replace(".", ",").replace("_", ".")
+        prec = DECIMALS.get(label, 3)
+    if prec == 0:
+        return _group_int(int(round(val)))
+    # round and split
+    v = round(float(val), prec)
+    sign = "-" if v < 0 else ""
+    v = abs(v)
+    int_part = int(math.floor(v))
+    frac_part = v - int_part
+    int_str = _group_int(int_part)
+    frac_str = f"{frac_part:.{prec}f}".split(".")[1]
+    return f"{sign}{int_str},{frac_str}"
 
 def extract_scene_variant(sheet_name: str) -> Tuple[Optional[str], Optional[str]]:
     m = re.search(r"scene\s*(\d+)\s*[_-]\s*([ab])", sheet_name, re.IGNORECASE)
@@ -210,9 +280,7 @@ def build_comparison_for_scene(scene: str,
     for label in ORDERED_LABELS:
         a = agg_A.get(label, float("nan"))
         b = agg_B.get(label, float("nan"))
-        delta = float("nan")
-        if a is not None and not (isinstance(a, float) and math.isnan(a)):
-            delta = (b - a) / a * 100.0
+        delta = percent_delta(a, b)
         rows.append({
             "Kennzahl": label,
             "A (Ø)": a,
@@ -254,16 +322,21 @@ def write_scene_sheets(wb: Workbook,
     # Agg B
     _write_agg(f"Scene{scene}_Agg_B", agg_B, "B")
 
-    # Vergleich
+    # Comparison sheet with methodology note
     ws = wb.create_sheet(title=f"Scene{scene}_Vergleich")
+    note_text = ("Δ = (B − A) / A · 100. Rounding: time & memory metrics 3 decimals; FPS 3 decimals; "
+                 "integer counters (N, Draw Calls, Primitives) 0 decimals; Δ 3 decimals. Decimal comma, NBSP thousands.")
+    ws.cell(row=1, column=1, value=note_text)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
+    ws.cell(row=1, column=1).alignment = Alignment(wrap_text=True)
     headers = ["Metric", "A (Ø)", "B (Ø)", "Δ B vs A [%]"]
     for ci, h in enumerate(headers, start=1):
-        c = ws.cell(row=1, column=ci, value=h)
+        c = ws.cell(row=2, column=ci, value=h)
         c.font = Font(bold=True)
         c.alignment = Alignment(horizontal="center")
 
-    # Write data rows; iterrows() keeps original column names (with spaces / symbols).
-    for excel_row, (_, row) in enumerate(cmp_df.iterrows(), start=2):
+    # Write data rows starting at row 3
+    for excel_row, (_, row) in enumerate(cmp_df.iterrows(), start=3):
         lab = row["Kennzahl"]
         ws.cell(row=excel_row, column=1, value=lab)
         ws.cell(row=excel_row, column=2, value=fmt_de(lab, row["A (Ø)"]))
@@ -336,6 +409,7 @@ def main():
     parser.add_argument("--auto", action="store_true", help="Auto-detect 'messungen_auswertung_a.xlsx' and '_b.xlsx' if present")
     parser.add_argument("--out", dest="out", type=Path, default=Path("messungen_ab_vergleich.xlsx"), help="Output workbook path")
     parser.add_argument("--no-recompute-fps", dest="recompute_fps", action="store_false", help="Do NOT recompute FPS from frametime means")
+    parser.add_argument("--debug", action="store_true", help="Print debug info about parsed sheets and metrics")
     parser.set_defaults(recompute_fps=True)
     args = parser.parse_args()
 
@@ -371,6 +445,7 @@ def main():
     # Szenen-Liste
     scenes = sorted(sorted({r["scene"] for r in records}), key=lambda s: int(re.findall(r"\d+", s)[0]))
     by_scene_var: Dict[Tuple[str, str], Dict[str, float]] = {}
+    by_scene_var_runs: Dict[Tuple[str, str], Dict[str, List[float]]] = {}
     # Optional FPS-Recompute (aus Frametime je Lauf)
     if args.recompute_fps:
         for r in records:
@@ -382,10 +457,20 @@ def main():
                     new_fps = float(np.mean(fps_runs))
                     orig_fps = r["agg"].get("FPS Ø [#]")  # type: ignore
                     r["agg"]["FPS Ø [#]"] = new_fps  # type: ignore
-                    # Optional: Differenzprüfung (still, aber könnte protokolliert werden)
                     r["_fps_diff"] = (orig_fps, new_fps)  # type: ignore
     for r in records:
         by_scene_var[(r["scene"], r["variant"])] = r["agg"]  # type: ignore
+        by_scene_var_runs[(r["scene"], r["variant"])] = r.get("runs", {})  # type: ignore
+
+    if args.debug:
+        print("--- DEBUG: Parsed Sheets Summary ---")
+        for r in records:
+            scene = r["scene"]; var = r["variant"]
+            runs = r.get("runs", {})  # type: ignore
+            print(f"Scene {scene} Variant {var} (sheet={r['sheet']}, source={r['source']}):")
+            for lab, vals in runs.items():
+                print(f"  - {lab:22s} runs={len(vals)} sample={vals[:3]}")
+        print("--- END DEBUG ---")
 
     wb = Workbook()
     if wb.active and wb.active.title == "Sheet":
@@ -405,6 +490,13 @@ def main():
         if not agg_A or not agg_B:
             warn_incomplete.append(scene)
         cmp_df = build_comparison_for_scene(scene, agg_A, agg_B)
+        # Warn if metric missing for one variant but present for the other
+        if args.debug:
+            for lab in ORDERED_LABELS:
+                a_vals = by_scene_var_runs.get((scene, "A"), {}).get(lab, [])
+                b_vals = by_scene_var_runs.get((scene, "B"), {}).get(lab, [])
+                if (not b_vals and a_vals) or (not a_vals and b_vals):
+                    print(f"DEBUG WARN: Scene{scene} metric '{lab}' missing values for variant {'B' if (not b_vals and a_vals) else 'A'}")
         write_scene_sheets(wb, scene, agg_A, agg_B, cmp_df)
         for _, row in cmp_df.iterrows():
             ws_sum.cell(row=sum_row, column=1, value=f"Scene{scene}")
